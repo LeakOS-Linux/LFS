@@ -170,6 +170,22 @@ run_cmd "make install" "Installing Perl"
 
 finish
 
+# ==================== LIBFFI ====================
+((CURRENT++))
+show_progress $CURRENT $TOTAL_PACKAGES
+begin libffi-3.4.2 tar.xz
+
+# Konfigurasi generic tanpa optimasi spesifik CPU
+run_cmd "./configure --prefix=/usr \
+            --disable-static \
+            --disable-exec-static-tramp \
+            --libdir=/usr/lib" "Configuring Libffi"
+
+run_cmd "make -j$(nproc)" "Building Libffi"
+run_cmd "make install" "Installing Libffi"
+
+finish
+
 # ==================== PYTHON ====================
 ((CURRENT++))
 show_progress $CURRENT $TOTAL_PACKAGES
@@ -187,21 +203,6 @@ ln -sf python3-config /usr/bin/python-config
 
 finish
 
-# ==================== LIBFFI ====================
-((CURRENT++))
-show_progress $CURRENT $TOTAL_PACKAGES
-begin libffi-3.4.2 tar.xz
-
-# Konfigurasi generic tanpa optimasi spesifik CPU
-run_cmd "./configure --prefix=/usr \
-            --disable-static \
-            --disable-exec-static-tramp \
-            --libdir=/usr/lib" "Configuring Libffi"
-
-run_cmd "make -j$(nproc)" "Building Libffi"
-run_cmd "make install" "Installing Libffi"
-
-finish
 
 # ==================== TEXINFO ====================
 ((CURRENT++))
