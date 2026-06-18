@@ -333,22 +333,28 @@ create_lfs_environment() {
     
     # Buat file .bashrc untuk LFS
     cat > $LFS/.bashrc << "EOF"
+set +h
+umask 022
 # LFS Environment
 export LFS=/mnt/lfs
 export LC_ALL=POSIX
 export LFS_TGT=$(uname -m)-lfs-linux-gnu
 export PATH=/tools/bin:/bin:/usr/bin
-export MAKEFLAGS='-j4'
+export MAKEFLAGS='-j$(nproc)'
+export LFS LC_ALL LFS_TGT
 EOF
 
     # Buat file profile untuk LFS
     cat > $LFS/.profile << "EOF"
+set +h
+umask 022
 # LFS Profile
 export LFS=/mnt/lfs
 export LC_ALL=POSIX
 export LFS_TGT=$(uname -m)-lfs-linux-gnu
 export PATH=/tools/bin:/bin:/usr/bin
-export MAKEFLAGS='-j4'
+export MAKEFLAGS='-j$(nproc)
+export LFS LC_ALL LFS_TGT
 EOF
 
     # Buat file environment dengan fungsi mount/umount otomatis
@@ -361,7 +367,7 @@ export LFS=/mnt/lfs
 export LC_ALL=POSIX
 export LFS_TGT=\$(uname -m)-lfs-linux-gnu
 export PATH=/tools/bin:/bin:/usr/bin
-export MAKEFLAGS='-j4'
+export MAKEFLAGS='-j$(nproc)'
 
 # Partisi yang digunakan
 PARTITION_LFS="$PARTITION_LFS"
