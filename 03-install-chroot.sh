@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# LFS Build Script - Optimized with error handling and logging
+# LFS Build Script - Menginstall ke /mnt/lfs
 # Warna untuk output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -9,9 +9,10 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Variabel global
+export LFS=/mnt/lfs
 package_name=""
 package_ext=""
-LOG_FILE="/sources/build.log"
+LOG_FILE="$LFS/sources/build.log"
 
 # Fungsi untuk logging
 log() {
@@ -35,9 +36,13 @@ begin() {
     log "${GREEN}Memulai build $package_name pada $(date)${NC}"
     log "${GREEN}========================================${NC}"
     
+    # Pindah ke direktori sources LFS
+    cd $LFS/sources || exit 1
+    
     # Cek apakah file ada
     if [ ! -f "$package_name.$package_ext" ]; then
-        log "${RED}ERROR: File $package_name.$package_ext tidak ditemukan!${NC}"
+        log "${RED}ERROR: File $LFS/sources/$package_name.$package_ext tidak ditemukan!${NC}"
+        log "${YELLOW}Pastikan file ada di $LFS/sources/${NC}"
         exit 1
     fi
     
@@ -79,7 +84,7 @@ finish() {
     log "${GREEN}Selesai membangun $package_name pada $(date)${NC}"
     log "${GREEN}----------------------------------------${NC}"
     
-    cd /sources
+    cd $LFS/sources
     if [ -d "$package_name" ]; then
         rm -rf $package_name
         log "${YELLOW}Membersihkan direktori $package_name${NC}"
@@ -117,24 +122,40 @@ show_progress() {
     echo -e "] $percent% ($current/$total)${NC}"
 }
 
-# Mulai build
+# ==================== PREPARATION ====================
 log "${GREEN}========================================${NC}"
 log "${GREEN}    MEMULAI BUILD LFS CHROOT          ${NC}"
 log "${GREEN}========================================${NC}"
+log "${YELLOW}LFS Directory: $LFS${NC}"
 log "${YELLOW}Log akan disimpan di: $LOG_FILE${NC}"
 log ""
 
-# Pindah ke direktori sources
-cd /sources || exit 1
-
-# Check if sources directory is accessible
-if [ ! -w /sources ]; then
-    log "${RED}ERROR: /sources tidak dapat diakses atau tidak memiliki izin tulis!${NC}"
+# Check if LFS is mounted
+if ! mount | grep -q "$LFS"; then
+    log "${RED}ERROR: $LFS tidak ter-mount!${NC}"
+    log "${YELLOW}Mount LFS terlebih dahulu:${NC}"
+    log "  mount $LFS"
+    log "  mount $LFS/home  # jika ada"
+    log "  mount $LFS/boot  # jika ada"
     exit 1
 fi
 
-# Hitung total packages
-TOTAL_PACKAGES=7
+# Check if sources directory exists
+if [ ! -d "$LFS/sources" ]; then
+    log "${RED}ERROR: $LFS/sources tidak ditemukan!${NC}"
+    log "${YELLOW}Buat direktori sources terlebih dahulu:${NC}"
+    log "  mkdir -pv $LFS/sources"
+    exit 1
+fi
+
+# Check if sources directory is writable
+if [ ! -w "$LFS/sources" ]; then
+    log "${RED}ERROR: $LFS/sources tidak dapat ditulis!${NC}"
+    exit 1
+fi
+
+# Hitung total packages (SEKARANG 8)
+TOTAL_PACKAGES=8
 CURRENT=0
 
 # ==================== GETTEXT ====================
@@ -142,7 +163,7 @@ CURRENT=0
 show_progress $CURRENT $TOTAL_PACKAGES
 begin gettext-0.21 tar.xz
 
-run_cmd "./configure --disable-shared" "Configuring Gettext"
+run_cmd "./configure --prefix=/usr --disable-shared" "Configuring Gettext"
 run_cmd "make -j$(nproc)" "Building Gettext"
 run_cmd "cp -v gettext-tools/src/{msgfmt,msgmerge,xgettext} /usr/bin" "Installing Gettext binaries"
 
@@ -182,6 +203,16 @@ run_cmd "./configure --prefix=/usr \
             --libdir=/usr/lib" "Configuring Libffi"
 
 run_cmd "make -j$(nproc)" "Building Libffi"
+
+# Jalankan test suite (opsional, tetapi disarankan)
+log "${BLUE}Menjalankan test suite untuk libffi...${NC}"
+make check >> $LOG_FILE 2>&1
+if [ $? -eq 0 ]; then
+    log "${GREEN}✓ Test suite libffi berhasil${NC}"
+else
+    log "${YELLOW}⚠ Beberapa test libffi mungkin gagal (biasanya test-callback.c)${NC}"
+fi
+
 run_cmd "make install" "Installing Libffi"
 
 finish
@@ -191,8 +222,7 @@ finish
 show_progress $CURRENT $TOTAL_PACKAGES
 begin Python-3.10.6 tar.xz
 
-# Fix Python build for LFS
-run_cmd "./configure --prefix=/usr --enable-shared --without-ensurepip --with-system-ffi" "Configuring Python"
+run_cmd "./configure --prefix=/usr --enable-shared --with-system-ffi --without-ensurepip" "Configuring Python"
 run_cmd "make -j$(nproc)" "Building Python"
 run_cmd "make install" "Installing Python"
 
@@ -202,7 +232,6 @@ ln -sf python3 /usr/bin/python
 ln -sf python3-config /usr/bin/python-config
 
 finish
-
 
 # ==================== TEXINFO ====================
 ((CURRENT++))
@@ -227,7 +256,7 @@ begin util-linux-2.38.1 tar.xz
 # Create hwclock directory
 mkdir -pv /var/lib/hwclock
 
-run_cmd "./configure ADJTIME_PATH=/var/lib/hwclock/adjtime --libdir=/usr/lib --with-ncurses --with-terminfo --disable-chfn-chsh --disable-login --disable-nologin --disable-su --disable-setpriv --disable-runuser --disable-pylibmount --disable-static --without-python runstatedir=/run" "Configuring Util-linux"
+run_cmd "./configure ADJTIME_PATH=/var/lib/hwclock/adjtime --libdir=/usr/lib --disable-chfn-chsh --disable-login --disable-nologin --disable-su --disable-setpriv --disable-runuser --disable-pylibmount --disable-static --without-python --with-ncurses --with-terminfo runstatedir=/run" "Configuring Util-linux"
 
 run_cmd "make -j$(nproc)" "Building Util-linux"
 run_cmd "make install" "Installing Util-linux"
@@ -241,12 +270,51 @@ log "${GREEN}========================================${NC}"
 log "${YELLOW}Total paket yang dibangun: $TOTAL_PACKAGES${NC}"
 log "${YELLOW}Log lengkap: $LOG_FILE${NC}"
 log ""
-log "${BLUE}Paket yang telah diinstall:${NC}"
+log "${BLUE}Paket yang telah diinstall ke $LFS:${NC}"
 log "  - Gettext-0.21 (msgfmt, msgmerge, xgettext)"
 log "  - Bison-3.8.2"
 log "  - Perl-5.36.0"
-log "  - Python-3.10.6"
+log "  - Libffi-3.4.2"
+log "  - Python-3.10.6 (dengan libffi support)"
 log "  - Texinfo-6.8"
-log "  - Util-linux-2.38.1"
+log "  - Util-linux-2.38.1 (dengan terminfo support)"
 log ""
-log "${GREEN}Lanjutkan ke langkah selanjutnya di panduan LFS.${NC}"
+log "${GREEN}Verifikasi instalasi:${NC}"
+log "  ls -l $LFS/usr/bin/ | grep -E '(msgfmt|bison|perl|python|texinfo|fdisk)'"
+log "  ls -l $LFS/usr/lib/libffi*"
+log ""
+log "${YELLOW}Langkah selanjutnya:${NC}"
+log "  1. Masuk ke chroot:"
+log "     chroot $LFS /usr/bin/env -i HOME=/root TERM=\"$TERM\" PS1='(lfs chroot) \\u:\\w\\$ ' PATH=/usr/bin:/usr/sbin /bin/bash --login"
+log "  2. Lanjutkan dengan build toolchain berikutnya"
+log ""
+
+# ==================== VERIFICATION ====================
+log "${BLUE}Verifikasi instalasi...${NC}"
+
+# Check if binaries exist
+verify_binary() {
+    local binary=$1
+    if [ -f "$LFS/usr/bin/$binary" ] || [ -f "$LFS/bin/$binary" ]; then
+        log "${GREEN}✓ $binary terinstall${NC}"
+    else
+        log "${YELLOW}⚠ $binary tidak ditemukan${NC}"
+    fi
+}
+
+verify_binary "msgfmt"
+verify_binary "bison"
+verify_binary "perl"
+verify_binary "python3"
+verify_binary "makeinfo"
+verify_binary "fdisk"
+
+# Verify libffi
+if [ -f "$LFS/usr/lib/libffi.so" ] || [ -f "$LFS/usr/lib/libffi.so.*" ]; then
+    log "${GREEN}✓ libffi terinstall${NC}"
+else
+    log "${YELLOW}⚠ libffi tidak ditemukan${NC}"
+fi
+
+log ""
+log "${GREEN}========================================${NC}"
