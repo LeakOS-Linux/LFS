@@ -1,5 +1,5 @@
 #!/bin/bash
-
+export LFS=/mnt/lfs
 # Periksa apakah script dijalankan dengan hak akses root
 if [ "$(id -u)" -ne 0 ]; then
     echo "Harus dijalankan sebagai root!"
