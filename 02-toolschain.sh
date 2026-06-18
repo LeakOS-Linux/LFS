@@ -1,363 +1,251 @@
 #!/bin/bash
-# [+] Author: LynxSaiko
-export LFS=/mnt/lfs
-export LFS_TGT=$(uname -m)-lfs-linux-gnu
-export PATH="$LFS/tools/bin:/bin:/usr/bin:$PATH"
-unset CXX CC AR AS LD RANLIB STRIP
 
+# LFS Build Script - Optimized with error handling and logging
+# Warna untuk output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Variabel global
 package_name=""
 package_ext=""
+LOG_FILE="/sources/build.log"
+
+# Fungsi untuk logging
+log() {
+    echo -e "$1" | tee -a $LOG_FILE
+}
+
+# Fungsi untuk mengecek error
+check_error() {
+    if [ $? -ne 0 ]; then
+        log "${RED}ERROR: Gagal membangun $package_name pada langkah: $1${NC}"
+        log "${RED}Periksa log di $LOG_FILE${NC}"
+        exit 1
+    fi
+}
 
 begin() {
-	package_name=$1
-	package_ext=$2
-
-	echo "Starting build of $package_name at $(date)"
-
-	tar xf $package_name.$package_ext
-	cd $package_name
+    package_name=$1
+    package_ext=$2
+    
+    log "${GREEN}========================================${NC}"
+    log "${GREEN}Memulai build $package_name pada $(date)${NC}"
+    log "${GREEN}========================================${NC}"
+    
+    # Cek apakah file ada
+    if [ ! -f "$package_name.$package_ext" ]; then
+        log "${RED}ERROR: File $package_name.$package_ext tidak ditemukan!${NC}"
+        exit 1
+    fi
+    
+    # Ekstrak dengan deteksi otomatis
+    case $package_ext in
+        tar.xz|txz)
+            tar -xJf $package_name.$package_ext
+            ;;
+        tar.gz|tgz)
+            tar -xzf $package_name.$package_ext
+            ;;
+        tar.bz2|tbz)
+            tar -xjf $package_name.$package_ext
+            ;;
+        tar)
+            tar -xf $package_name.$package_ext
+            ;;
+        zip)
+            unzip $package_name.$package_ext
+            ;;
+        *)
+            log "${RED}Format ekstensi tidak dikenal: $package_ext${NC}"
+            exit 1
+            ;;
+    esac
+    check_error "Ekstraksi file"
+    
+    # Cek apakah direktori berhasil dibuat
+    if [ ! -d "$package_name" ]; then
+        log "${RED}ERROR: Direktori $package_name tidak ditemukan setelah ekstraksi!${NC}"
+        exit 1
+    fi
+    
+    cd $package_name
+    log "${BLUE}Masuk ke direktori: $(pwd)${NC}"
 }
 
 finish() {
-	echo "Finishing build of $package_name at $(date)"
-
-	cd $LFS/sources
-	rm -rf $package_name
+    log "${GREEN}Selesai membangun $package_name pada $(date)${NC}"
+    log "${GREEN}----------------------------------------${NC}"
+    
+    cd /sources
+    if [ -d "$package_name" ]; then
+        rm -rf $package_name
+        log "${YELLOW}Membersihkan direktori $package_name${NC}"
+    fi
 }
 
-cd $LFS/sources
+# Fungsi untuk menjalankan perintah dengan logging
+run_cmd() {
+    local cmd="$1"
+    local desc="$2"
+    
+    log "${BLUE}Running: $desc${NC}"
+    log "${YELLOW}Command: $cmd${NC}"
+    
+    eval $cmd >> $LOG_FILE 2>&1
+    local status=$?
+    
+    if [ $status -ne 0 ]; then
+        log "${RED}ERROR: Gagal menjalankan: $desc${NC}"
+        log "${RED}Status: $status${NC}"
+        exit 1
+    fi
+    
+    log "${GREEN}✓ Success: $desc${NC}"
+}
 
-# 5.2. Binutils-2.39 - Pass 1
-begin binutils-2.39 tar.xz
-mkdir -v build
-cd       build
-../configure --prefix=$LFS/tools \
-             --with-sysroot=$LFS \
-             --target=$LFS_TGT   \
-             --disable-nls       \
-             --enable-gprofng=no \
-             --disable-werror
-make -j$(nproc)
-make install
+# Fungsi untuk menampilkan progress
+show_progress() {
+    local current=$1
+    local total=$2
+    local percent=$((current * 100 / total))
+    echo -ne "\r${BLUE}Progress: ["
+    for ((i=0; i<percent/2; i++)); do echo -n "#"; done
+    for ((i=percent/2; i<50; i++)); do echo -n " "; done
+    echo -e "] $percent% ($current/$total)${NC}"
+}
+
+# Mulai build
+log "${GREEN}========================================${NC}"
+log "${GREEN}    MEMULAI BUILD LFS CHROOT          ${NC}"
+log "${GREEN}========================================${NC}"
+log "${YELLOW}Log akan disimpan di: $LOG_FILE${NC}"
+log ""
+
+# Pindah ke direktori sources
+cd /sources || exit 1
+
+# Check if sources directory is accessible
+if [ ! -w /sources ]; then
+    log "${RED}ERROR: /sources tidak dapat diakses atau tidak memiliki izin tulis!${NC}"
+    exit 1
+fi
+
+# Hitung total packages
+TOTAL_PACKAGES=7
+CURRENT=0
+
+# ==================== GETTEXT ====================
+((CURRENT++))
+show_progress $CURRENT $TOTAL_PACKAGES
+begin gettext-0.21 tar.xz
+
+run_cmd "./configure --disable-shared" "Configuring Gettext"
+run_cmd "make -j$(nproc)" "Building Gettext"
+run_cmd "cp -v gettext-tools/src/{msgfmt,msgmerge,xgettext} /usr/bin" "Installing Gettext binaries"
+
 finish
 
-# 5.3. GCC-12.2.0 - Pass 1
-begin gcc-12.2.0 tar.xz
-tar -xf ../mpfr-4.1.0.tar.xz
-mv -v mpfr-4.1.0 mpfr
-tar -xf ../gmp-6.2.1.tar.xz
-mv -v gmp-6.2.1 gmp
-tar -xf ../mpc-1.2.1.tar.gz
-mv -v mpc-1.2.1 mpc
-case $(uname -m) in
-  x86_64)
-    sed -e '/m64=/s/lib64/lib/' \
-        -i.orig gcc/config/i386/t-linux64
- ;;
-esac
-mkdir -v build
-cd       build
-../configure                  \
-    --target=$LFS_TGT         \
-    --prefix=$LFS/tools       \
-    --with-glibc-version=2.36 \
-    --with-sysroot=$LFS       \
-    --with-newlib             \
-    --without-headers         \
-    --disable-nls             \
-    --disable-shared          \
-    --disable-multilib        \
-    --disable-decimal-float   \
-    --disable-threads         \
-    --disable-libatomic       \
-    --disable-libgomp         \
-    --disable-libquadmath     \
-    --disable-libssp          \
-    --disable-libvtv          \
-    --disable-libstdcxx       \
-    --enable-languages=c,c++
-make -j$(nproc)
-make install
-cd ..
-cat gcc/limitx.h gcc/glimits.h gcc/limity.h > \
-  `dirname $($LFS_TGT-gcc -print-libgcc-file-name)`/install-tools/include/limits.h
+# ==================== BISON ====================
+((CURRENT++))
+show_progress $CURRENT $TOTAL_PACKAGES
+begin bison-3.8.2 tar.xz
+
+run_cmd "./configure --prefix=/usr --docdir=/usr/share/doc/bison-3.8.2" "Configuring Bison"
+run_cmd "make -j$(nproc)" "Building Bison"
+run_cmd "make install" "Installing Bison"
+
 finish
 
-# 5.4. Linux-5.10.195 API Headers
-begin linux-5.10.195 tar.xz
-make mrproper
-make headers
-find usr/include -type f ! -name '*.h' -delete
-cp -rv usr/include $LFS/usr
+# ==================== PERL ====================
+((CURRENT++))
+show_progress $CURRENT $TOTAL_PACKAGES
+begin perl-5.36.0 tar.xz
+
+run_cmd "sh Configure -des -Dprefix=/usr -Dvendorprefix=/usr -Dprivlib=/usr/lib/perl5/5.36/core_perl -Darchlib=/usr/lib/perl5/5.36/core_perl -Dsitelib=/usr/lib/perl5/5.36/site_perl -Dsitearch=/usr/lib/perl5/5.36/site_perl -Dvendorlib=/usr/lib/perl5/5.36/vendor_perl -Dvendorarch=/usr/lib/perl5/5.36/vendor_perl" "Configuring Perl"
+run_cmd "make -j$(nproc)" "Building Perl"
+run_cmd "make install" "Installing Perl"
+
 finish
 
-# 5.5. Glibc-2.36
-begin glibc-2.36 tar.xz
-case $(uname -m) in
-    i?86)   ln -sfv ld-linux.so.2 $LFS/lib/ld-lsb.so.3
-    ;;
-    x86_64) ln -sfv ../lib/ld-linux-x86-64.so.2 $LFS/lib64
-            ln -sfv ../lib/ld-linux-x86-64.so.2 $LFS/lib64/ld-lsb-x86-64.so.3
-    ;;
-esac
-patch -Np1 -i ../glibc-2.36-fhs-1.patch
-mkdir -v build
-cd       build
-echo "rootsbindir=/usr/sbin" > configparms
-../configure                             \
-      --prefix=/usr                      \
-      --host=$LFS_TGT                    \
-      --build=$(../scripts/config.guess) \
-      --enable-kernel=3.2                \
-      --with-headers=$LFS/usr/include    \
-      libc_cv_slibdir=/usr/lib
-make -j$(nproc)
-make DESTDIR=$LFS install
-sed '/RTLDLIST=/s@/usr@@g' -i $LFS/usr/bin/ldd
-echo 'int main(){}' | gcc -xc -
-readelf -l a.out | grep ld-linux
-rm -v a.out
-$LFS/tools/libexec/gcc/$LFS_TGT/12.2.0/install-tools/mkheaders
+# ==================== PYTHON ====================
+((CURRENT++))
+show_progress $CURRENT $TOTAL_PACKAGES
+begin Python-3.10.6 tar.xz
+
+# Fix Python build for LFS
+run_cmd "./configure --prefix=/usr --enable-shared --without-ensurepip --with-system-ffi" "Configuring Python"
+run_cmd "make -j$(nproc)" "Building Python"
+run_cmd "make install" "Installing Python"
+
+# Create symlinks for Python
+log "${BLUE}Creating Python symlinks...${NC}"
+ln -sf python3 /usr/bin/python
+ln -sf python3-config /usr/bin/python-config
+
 finish
 
-# 5.6. Libstdc++ from GCC-12.2.0
-begin gcc-12.2.0 tar.xz
-mkdir -v build
-cd       build
-../libstdc++-v3/configure           \
-    --host=$LFS_TGT                 \
-    --build=$(../config.guess)      \
-    --prefix=/usr                   \
-    --disable-multilib              \
-    --disable-nls                   \
-    --disable-libstdcxx-pch         \
-    --with-gxx-include-dir=/tools/$LFS_TGT/include/c++/12.2.0
-make -j$(nproc)
-make DESTDIR=$LFS install
-rm -v $LFS/usr/lib/lib{stdc++,stdc++fs,supc++}.la
+# ==================== LIBFFI ====================
+((CURRENT++))
+show_progress $CURRENT $TOTAL_PACKAGES
+begin libffi-3.4.2 tar.xz
+
+# Konfigurasi generic tanpa optimasi spesifik CPU
+run_cmd "./configure --prefix=/usr \
+            --disable-static \
+            --disable-exec-static-tramp \
+            --libdir=/usr/lib" "Configuring Libffi"
+
+run_cmd "make -j$(nproc)" "Building Libffi"
+run_cmd "make install" "Installing Libffi"
+
 finish
 
-# 6.2. M4-1.4.19
-begin m4-1.4.19 tar.xz
-./configure --prefix=/usr   \
-            --host=$LFS_TGT \
-            --build=$(build-aux/config.guess)
-make -j$(nproc)
-make DESTDIR=$LFS install
+# ==================== TEXINFO ====================
+((CURRENT++))
+show_progress $CURRENT $TOTAL_PACKAGES
+begin texinfo-6.8 tar.xz
+
+run_cmd "./configure --prefix=/usr" "Configuring Texinfo"
+run_cmd "make -j$(nproc)" "Building Texinfo"
+run_cmd "make install" "Installing Texinfo"
+
+# Install info files
+log "${BLUE}Installing info files...${NC}"
+make TEXMF=/usr/share/texmf install-tex >> $LOG_FILE 2>&1 || log "${YELLOW}Warning: install-tex failed${NC}"
+
 finish
 
-# 6.3. Ncurses-6.3
-begin ncurses-6.3 tar.gz
-sed -i s/mawk// configure
-mkdir build
-pushd build
-  ../configure
-  make -C include
-  make -C progs tic
-popd
-./configure --prefix=/usr                \
-            --host=$LFS_TGT              \
-            --build=$(./config.guess)    \
-            --mandir=/usr/share/man      \
-            --with-manpage-format=normal \
-            --with-shared                \
-            --without-normal             \
-            --with-cxx-shared            \
-            --without-debug              \
-            --without-ada                \
-            --disable-stripping          \
-            --enable-widec
-make -j$(nproc)
-make DESTDIR=$LFS TIC_PATH=$(pwd)/build/progs/tic install
-echo "INPUT(-lncursesw)" > $LFS/usr/lib/libncurses.so
+# ==================== UTIL-LINUX ====================
+((CURRENT++))
+show_progress $CURRENT $TOTAL_PACKAGES
+begin util-linux-2.38.1 tar.xz
+
+# Create hwclock directory
+mkdir -pv /var/lib/hwclock
+
+run_cmd "./configure ADJTIME_PATH=/var/lib/hwclock/adjtime --libdir=/usr/lib --with-ncurses --with-terminfo --disable-chfn-chsh --disable-login --disable-nologin --disable-su --disable-setpriv --disable-runuser --disable-pylibmount --disable-static --without-python runstatedir=/run" "Configuring Util-linux"
+
+run_cmd "make -j$(nproc)" "Building Util-linux"
+run_cmd "make install" "Installing Util-linux"
+
 finish
 
-# 6.4. Bash-5.1.16
-begin bash-5.1.16 tar.gz
-./configure --prefix=/usr                   \
-            --build=$(support/config.guess) \
-            --host=$LFS_TGT                 \
-            --without-bash-malloc
-make -j$(nproc)
-make DESTDIR=$LFS install
-ln -sv bash $LFS/bin/sh
-finish
-
-# 6.5. Coreutils-9.1
-begin coreutils-9.1 tar.xz
-./configure --prefix=/usr                     \
-            --host=$LFS_TGT                   \
-            --build=$(build-aux/config.guess) \
-            --enable-install-program=hostname \
-            --enable-no-install-program=kill,uptime
-make -j$(nproc)
-make DESTDIR=$LFS install
-mv -v $LFS/usr/bin/chroot              $LFS/usr/sbin
-mkdir -pv $LFS/usr/share/man/man8
-mv -v $LFS/usr/share/man/man1/chroot.1 $LFS/usr/share/man/man8/chroot.8
-sed -i 's/"1"/"8"/'                    $LFS/usr/share/man/man8/chroot.8
-finish
-
-# 6.6. Diffutils-3.8
-begin diffutils-3.8 tar.xz
-./configure --prefix=/usr --host=$LFS_TGT
-make -j$(nproc)
-make DESTDIR=$LFS install
-finish
-
-# 6.7. File-5.42
-begin file-5.42 tar.gz
-mkdir build
-pushd build
-  ../configure --disable-bzlib      \
-               --disable-libseccomp \
-               --disable-xzlib      \
-               --disable-zlib
-  make -j$(nproc)
-popd
-./configure --prefix=/usr --host=$LFS_TGT --build=$(./config.guess)
-make FILE_COMPILE=$(pwd)/build/src/file
-make DESTDIR=$LFS install
-rm -v $LFS/usr/lib/libmagic.la
-finish
-
-# 6.8. Findutils-4.9.0
-begin findutils-4.9.0 tar.xz
-./configure --prefix=/usr                   \
-            --localstatedir=/var/lib/locate \
-            --host=$LFS_TGT                 \
-            --build=$(build-aux/config.guess)
-make -j$(nproc)
-make DESTDIR=$LFS install
-finish
-
-# 6.9. Gawk-5.1.1
-begin gawk-5.1.1 tar.xz
-sed -i 's/extras//' Makefile.in
-./configure --prefix=/usr   \
-            --host=$LFS_TGT \
-            --build=$(build-aux/config.guess)
-make -j$(nproc)
-make DESTDIR=$LFS install
-finish
-
-# 6.10. Grep-3.7
-begin grep-3.7 tar.xz
-./configure --prefix=/usr   \
-            --host=$LFS_TGT
-make -j$(nproc)
-make DESTDIR=$LFS install
-finish
-
-# 6.11. Gzip-1.12
-begin gzip-1.12 tar.xz
-./configure --prefix=/usr --host=$LFS_TGT
-make -j$(nproc)
-make DESTDIR=$LFS install
-finish
-
-# 6.12. Make-4.3
-begin make-4.3 tar.gz
-./configure --prefix=/usr   \
-            --without-guile \
-            --host=$LFS_TGT \
-            --build=$(build-aux/config.guess)
-make -j$(nproc)
-make DESTDIR=$LFS install
-finish
-
-# 6.13. Patch-2.7.6
-begin patch-2.7.6 tar.xz
-./configure --prefix=/usr   \
-            --host=$LFS_TGT \
-            --build=$(build-aux/config.guess)
-make -j$(nproc)
-make DESTDIR=$LFS install
-finish
-
-# 6.14. Sed-4.8
-begin sed-4.8 tar.xz
-./configure --prefix=/usr   \
-            --host=$LFS_TGT
-make -j$(nproc)
-make DESTDIR=$LFS install
-finish
-
-# 6.15. Tar-1.34
-begin tar-1.34 tar.xz
-./configure --prefix=/usr                     \
-            --host=$LFS_TGT                   \
-            --build=$(build-aux/config.guess)
-make -j$(nproc)
-make DESTDIR=$LFS install
-finish
-
-# 6.16. Xz-5.2.6
-begin xz-5.2.6 tar.xz
-./configure --prefix=/usr                     \
-            --host=$LFS_TGT                   \
-            --build=$(build-aux/config.guess) \
-            --disable-static                  \
-make -j$(nproc)
-make DESTDIR=$LFS install
-rm -v $LFS/usr/lib/liblzma.la
-finish
-
-# 6.17. Binutils-2.39 - Pass 2
-begin binutils-2.39 tar.xz
-sed '6009s/$add_dir//' -i ltmain.sh
-mkdir -v build
-cd       build
-../configure                   \
-    --prefix=/usr              \
-    --build=$(../config.guess) \
-    --host=$LFS_TGT            \
-    --disable-nls              \
-    --enable-shared            \
-    --enable-gprofng=no        \
-    --disable-werror           \
-    --enable-64-bit-bfd
-make -j$(nproc)
-make DESTDIR=$LFS install
-rm -v $LFS/usr/lib/lib{bfd,ctf,ctf-nobfd,opcodes}.{a,la}
-finish
-
-# 6.18. GCC-12.2.0 - Pass 2
-begin gcc-12.2.0 tar.xz
-tar -xf ../mpfr-4.1.0.tar.xz
-mv -v mpfr-4.1.0 mpfr
-tar -xf ../gmp-6.2.1.tar.xz
-mv -v gmp-6.2.1 gmp
-tar -xf ../mpc-1.2.1.tar.gz
-mv -v mpc-1.2.1 mpc
-case $(uname -m) in
-  x86_64)
-    sed -e '/m64=/s/lib64/lib/' -i.orig gcc/config/i386/t-linux64
-  ;;
-esac
-sed '/thread_header =/s/@.*@/gthr-posix.h/' \
-    -i libgcc/Makefile.in libstdc++-v3/include/Makefile.in
-mkdir -v build
-cd       build
-../configure                                       \
-    --build=$(../config.guess)                     \
-    --host=$LFS_TGT                                \
-    --target=$LFS_TGT                              \
-    LDFLAGS_FOR_TARGET=-L$PWD/$LFS_TGT/libgcc      \
-    --prefix=/usr                                  \
-    --with-build-sysroot=$LFS                      \
-    --enable-initfini-array                        \
-    --disable-nls                                  \
-    --disable-multilib                             \
-    --disable-decimal-float                        \
-    --disable-libatomic                            \
-    --disable-libgomp                              \
-    --disable-libquadmath                          \
-    --disable-libssp                               \
-    --disable-libvtv                               \
-    --enable-languages=c,c++
-make -j$(nproc)
-make DESTDIR=$LFS install
-ln -sv gcc $LFS/usr/bin/cc
-finish
-exit
+# ==================== SELESAI ====================
+log "${GREEN}========================================${NC}"
+log "${GREEN}    BUILD LFS CHROOT SELESAI!          ${NC}"
+log "${GREEN}========================================${NC}"
+log "${YELLOW}Total paket yang dibangun: $TOTAL_PACKAGES${NC}"
+log "${YELLOW}Log lengkap: $LOG_FILE${NC}"
+log ""
+log "${BLUE}Paket yang telah diinstall:${NC}"
+log "  - Gettext-0.21 (msgfmt, msgmerge, xgettext)"
+log "  - Bison-3.8.2"
+log "  - Perl-5.36.0"
+log "  - Python-3.10.6"
+log "  - Texinfo-6.8"
+log "  - Util-linux-2.38.1"
+log ""
+log "${GREEN}Lanjutkan ke langkah selanjutnya di panduan LFS.${NC}"
